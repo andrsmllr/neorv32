@@ -294,13 +294,15 @@ begin
     CPU_EXTENSION_RISCV_Zicntr   => true,          -- implement base counters?
     CPU_EXTENSION_RISCV_Zihpm    => true,          -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei => true,          -- implement instruction stream sync.?
+    CPU_EXTENSION_RISCV_Zmmul    => false,         -- implement multiply-only M sub-extension?
+    CPU_EXTENSION_RISCV_Zxcfu    => true,          -- implement custom (instr.) functions unit?
     -- Extension Options --
     FAST_MUL_EN                  => false,         -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                => false,         -- use barrel shifter for shift operations
     CPU_CNT_WIDTH                => 64,            -- total width of CPU cycle and instret counters (0..64)
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              => 8,             -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          => 64*1024,       -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+    PMP_NUM_REGIONS              => 5,             -- number of regions (0..16)
+    PMP_MIN_GRANULARITY          => 4,             -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 => 12,            -- number of implemented HPM counters (0..29)
     HPM_CNT_WIDTH                => 40,            -- total size of HPM counters (0..64)

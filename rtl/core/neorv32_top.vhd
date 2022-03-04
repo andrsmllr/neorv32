@@ -67,16 +67,17 @@ entity neorv32_top is
     CPU_EXTENSION_RISCV_Zihpm    : boolean := false;  -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei : boolean := false;  -- implement instruction stream sync.?
     CPU_EXTENSION_RISCV_Zmmul    : boolean := false;  -- implement multiply-only M sub-extension?
+    CPU_EXTENSION_RISCV_Zxcfu    : boolean := false;  -- implement custom (instr.) functions unit?
 
-    -- Extension Options --
+    -- Tuning Options --
     FAST_MUL_EN                  : boolean := false;  -- use DSPs for M extension's multiplier
     FAST_SHIFT_EN                : boolean := false;  -- use barrel shifter for shift operations
     CPU_CNT_WIDTH                : natural := 64;     -- total width of CPU cycle and instret counters (0..64)
     CPU_IPB_ENTRIES              : natural := 2;      -- entries is instruction prefetch buffer, has to be a power of 2
 
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              : natural := 0;      -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          : natural := 64*1024; -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+    PMP_NUM_REGIONS              : natural := 0;      -- number of regions (0..16)
+    PMP_MIN_GRANULARITY          : natural := 4;      -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
 
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 : natural := 0;      -- number of implemented HPM counters (0..29)
@@ -205,8 +206,8 @@ entity neorv32_top is
     spi_csn_o      : out std_ulogic_vector(07 downto 0); -- chip-select
 
     -- TWI (available if IO_TWI_EN = true) --
-    twi_sda_io     : inout std_logic := 'U'; -- twi serial data line
-    twi_scl_io     : inout std_logic := 'U'; -- twi serial clock line
+    twi_sda_io     : inout std_logic; -- twi serial data line
+    twi_scl_io     : inout std_logic; -- twi serial clock line
 
     -- PWM (available if IO_PWM_NUM_CH > 0) --
     pwm_o          : out std_ulogic_vector(59 downto 0); -- pwm channels
@@ -436,27 +437,26 @@ begin
   begin
     if (sys_rstn = '0') then
       clk_gen_en_ff <= '-';
-      clk_div       <= (others => '0'); -- reset required
       clk_div_ff    <= (others => '-');
-      clk_gen       <= (others => '-');
+      clk_div       <= (others => '0'); -- reset required
     elsif rising_edge(clk_i) then
       clk_gen_en_ff <= or_reduce_f(clk_gen_en);
-      -- actual clock generator --
-      if (clk_gen_en_ff = '1') then
+      clk_div_ff    <= clk_div;
+      if (clk_gen_en_ff = '1') then -- actual clock generator
         clk_div <= std_ulogic_vector(unsigned(clk_div) + 1);
       end if;
-      -- clock enables: rising edge detectors --
-      clk_div_ff <= clk_div;
-      clk_gen(clk_div2_c)    <= clk_div(0)  and (not clk_div_ff(0));  -- CLK/2
-      clk_gen(clk_div4_c)    <= clk_div(1)  and (not clk_div_ff(1));  -- CLK/4
-      clk_gen(clk_div8_c)    <= clk_div(2)  and (not clk_div_ff(2));  -- CLK/8
-      clk_gen(clk_div64_c)   <= clk_div(5)  and (not clk_div_ff(5));  -- CLK/64
-      clk_gen(clk_div128_c)  <= clk_div(6)  and (not clk_div_ff(6));  -- CLK/128
-      clk_gen(clk_div1024_c) <= clk_div(9)  and (not clk_div_ff(9));  -- CLK/1024
-      clk_gen(clk_div2048_c) <= clk_div(10) and (not clk_div_ff(10)); -- CLK/2048
-      clk_gen(clk_div4096_c) <= clk_div(11) and (not clk_div_ff(11)); -- CLK/4096
     end if;
   end process clock_generator;
+
+  -- clock enables: rising edge detectors --
+  clk_gen(clk_div2_c)    <= clk_div(0)  and (not clk_div_ff(0));  -- CLK/2
+  clk_gen(clk_div4_c)    <= clk_div(1)  and (not clk_div_ff(1));  -- CLK/4
+  clk_gen(clk_div8_c)    <= clk_div(2)  and (not clk_div_ff(2));  -- CLK/8
+  clk_gen(clk_div64_c)   <= clk_div(5)  and (not clk_div_ff(5));  -- CLK/64
+  clk_gen(clk_div128_c)  <= clk_div(6)  and (not clk_div_ff(6));  -- CLK/128
+  clk_gen(clk_div1024_c) <= clk_div(9)  and (not clk_div_ff(9));  -- CLK/1024
+  clk_gen(clk_div2048_c) <= clk_div(10) and (not clk_div_ff(10)); -- CLK/2048
+  clk_gen(clk_div4096_c) <= clk_div(11) and (not clk_div_ff(11)); -- CLK/4096
 
   -- fresh clocks anyone? --
   clk_gen_en(0) <= wdt_cg_en;
@@ -492,6 +492,7 @@ begin
     CPU_EXTENSION_RISCV_Zihpm    => CPU_EXTENSION_RISCV_Zihpm,    -- implement hardware performance monitors?
     CPU_EXTENSION_RISCV_Zifencei => CPU_EXTENSION_RISCV_Zifencei, -- implement instruction stream sync.?
     CPU_EXTENSION_RISCV_Zmmul    => CPU_EXTENSION_RISCV_Zmmul,    -- implement multiply-only M sub-extension?
+    CPU_EXTENSION_RISCV_Zxcfu    => CPU_EXTENSION_RISCV_Zxcfu,    -- implement custom (instr.) functions unit?
     CPU_EXTENSION_RISCV_DEBUG    => ON_CHIP_DEBUGGER_EN,          -- implement CPU debug mode?
     -- Extension Options --
     FAST_MUL_EN                  => FAST_MUL_EN,                  -- use DSPs for M extension's multiplier
@@ -499,8 +500,8 @@ begin
     CPU_CNT_WIDTH                => CPU_CNT_WIDTH,                -- total width of CPU cycle and instret counters (0..64)
     CPU_IPB_ENTRIES              => CPU_IPB_ENTRIES,              -- entries is instruction prefetch buffer, has to be a power of 2
     -- Physical Memory Protection (PMP) --
-    PMP_NUM_REGIONS              => PMP_NUM_REGIONS,              -- number of regions (0..64)
-    PMP_MIN_GRANULARITY          => PMP_MIN_GRANULARITY,          -- minimal region granularity in bytes, has to be a power of 2, min 8 bytes
+    PMP_NUM_REGIONS              => PMP_NUM_REGIONS,              -- number of regions (0..16)
+    PMP_MIN_GRANULARITY          => PMP_MIN_GRANULARITY,          -- minimal region granularity in bytes, has to be a power of 2, min 4 bytes
     -- Hardware Performance Monitors (HPM) --
     HPM_NUM_CNTS                 => HPM_NUM_CNTS,                 -- number of implemented HPM counters (0..29)
     HPM_CNT_WIDTH                => HPM_CNT_WIDTH                 -- total size of HPM counters (0..64)
@@ -590,6 +591,7 @@ begin
       clk_i        => clk_i,         -- global clock, rising edge
       rstn_i       => sys_rstn,      -- global reset, low-active, async
       clear_i      => cpu_i.fence,   -- cache clear
+      miss_o       => open,          -- cache miss
       -- host controller interface --
       host_addr_i  => cpu_i.addr,    -- bus access address
       host_rdata_o => cpu_i.rdata,   -- bus read data
@@ -686,6 +688,8 @@ begin
     rdata_v := (others => '0');
     ack_v   := '0';
     err_v   := '0';
+    -- OR all module's response signals: only the module that is actually
+    -- been accessed is allowed to set it's bus output signals
     for i in resp_bus'range loop
       rdata_v := rdata_v or resp_bus(i).rdata; -- read data
       ack_v   := ack_v   or resp_bus(i).ack;   -- acknowledge
@@ -744,9 +748,9 @@ begin
       addr_i => p_bus.addr,                -- address
       data_i => p_bus.wdata,               -- data in
       data_o => resp_bus(RESP_IMEM).rdata, -- data out
-      ack_o  => resp_bus(RESP_IMEM).ack    -- transfer acknowledge
+      ack_o  => resp_bus(RESP_IMEM).ack,   -- transfer acknowledge
+      err_o  => resp_bus(RESP_IMEM).err    -- transfer error
     );
-    resp_bus(RESP_IMEM).err <= '0'; -- no access error possible
   end generate;
 
   neorv32_int_imem_inst_false:
@@ -794,11 +798,12 @@ begin
     port map (
       clk_i  => clk_i,                        -- global clock line
       rden_i => p_bus.re,                     -- read enable
+      wren_i => p_bus.we,                     -- write enable
       addr_i => p_bus.addr,                   -- address
       data_o => resp_bus(RESP_BOOTROM).rdata, -- data out
-      ack_o  => resp_bus(RESP_BOOTROM).ack    -- transfer acknowledge
+      ack_o  => resp_bus(RESP_BOOTROM).ack,   -- transfer acknowledge
+      err_o  => resp_bus(RESP_BOOTROM).err    -- transfer error
     );
-    resp_bus(RESP_BOOTROM).err <= '0'; -- no access error possible
   end generate;
 
   neorv32_boot_rom_inst_false:
@@ -939,9 +944,8 @@ begin
   -- IO Access? -----------------------------------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   io_acc  <= '1' when (p_bus.addr(data_width_c-1 downto index_size_f(io_size_c)) = io_base_c(data_width_c-1 downto index_size_f(io_size_c))) else '0';
-  io_rden <= io_acc and p_bus.re and (not p_bus.src); -- PMA: no_execute for IO region
-  -- the default NEORV32 peripheral/IO devices in the IO area can only be written in word mode (reduces HW complexity)
-  io_wren <= io_acc and p_bus.we and and_reduce_f(p_bus.ben) and (not p_bus.src); -- PMA: write32 only, no_execute for IO region
+  io_rden <= io_acc and p_bus.re;
+  io_wren <= io_acc and p_bus.we and and_reduce_f(p_bus.ben); -- only full-word write accesses are allowed (reduces HW complexity)
 
 
   -- Custom Functions Subsystem (CFS) -------------------------------------------------------
@@ -960,7 +964,7 @@ begin
       rstn_i      => sys_rstn,                 -- global reset line, low-active, use as async
       addr_i      => p_bus.addr,               -- address
       rden_i      => io_rden,                  -- read enable
-      wren_i      => io_wren,                  -- byte write enable
+      wren_i      => io_wren,                  -- word write enable
       data_i      => p_bus.wdata,              -- data in
       data_o      => resp_bus(RESP_CFS).rdata, -- data out
       ack_o       => resp_bus(RESP_CFS).ack,   -- transfer acknowledge
@@ -1493,54 +1497,42 @@ begin
   neorv32_sysinfo_inst: neorv32_sysinfo
   generic map (
     -- General --
-    CLOCK_FREQUENCY              => CLOCK_FREQUENCY,      -- clock frequency of clk_i in Hz
-    INT_BOOTLOADER_EN            => INT_BOOTLOADER_EN,    -- implement processor-internal bootloader?
-    -- RISC-V CPU Extensions --
-    CPU_EXTENSION_RISCV_Zfinx    => CPU_EXTENSION_RISCV_Zfinx,    -- implement 32-bit floating-point extension (using INT reg!)
-    CPU_EXTENSION_RISCV_Zicsr    => CPU_EXTENSION_RISCV_Zicsr,    -- implement CSR system?
-    CPU_EXTENSION_RISCV_Zicntr   => CPU_EXTENSION_RISCV_Zicntr,   -- implement base counters?
-    CPU_EXTENSION_RISCV_Zihpm    => CPU_EXTENSION_RISCV_Zihpm,    -- implement hardware performance monitors?
-    CPU_EXTENSION_RISCV_Zifencei => CPU_EXTENSION_RISCV_Zifencei, -- implement instruction stream sync.?
-    CPU_EXTENSION_RISCV_Zmmul    => CPU_EXTENSION_RISCV_Zmmul,    -- implement multiply-only M sub-extension?
-    CPU_EXTENSION_RISCV_DEBUG    => ON_CHIP_DEBUGGER_EN,          -- implement CPU debug mode?
-    -- Extension Options --
-    FAST_MUL_EN                  => FAST_MUL_EN,          -- use DSPs for M extension's multiplier
-    FAST_SHIFT_EN                => FAST_SHIFT_EN,        -- use barrel shifter for shift operations
-    CPU_CNT_WIDTH                => CPU_CNT_WIDTH,        -- total width of CPU cycle and instret counters (0..64)
+    CLOCK_FREQUENCY      => CLOCK_FREQUENCY,      -- clock frequency of clk_i in Hz
+    INT_BOOTLOADER_EN    => INT_BOOTLOADER_EN,    -- implement processor-internal bootloader?
     -- Physical memory protection (PMP) --
-    PMP_NUM_REGIONS              => PMP_NUM_REGIONS,      -- number of regions (0..64)
+    PMP_NUM_REGIONS      => PMP_NUM_REGIONS,      -- number of regions (0..16)
     -- internal Instruction memory --
-    MEM_INT_IMEM_EN              => MEM_INT_IMEM_EN,      -- implement processor-internal instruction memory
-    MEM_INT_IMEM_SIZE            => MEM_INT_IMEM_SIZE,    -- size of processor-internal instruction memory in bytes
+    MEM_INT_IMEM_EN      => MEM_INT_IMEM_EN,      -- implement processor-internal instruction memory
+    MEM_INT_IMEM_SIZE    => MEM_INT_IMEM_SIZE,    -- size of processor-internal instruction memory in bytes
     -- Internal Data memory --
-    MEM_INT_DMEM_EN              => MEM_INT_DMEM_EN,      -- implement processor-internal data memory
-    MEM_INT_DMEM_SIZE            => MEM_INT_DMEM_SIZE,    -- size of processor-internal data memory in bytes
+    MEM_INT_DMEM_EN      => MEM_INT_DMEM_EN,      -- implement processor-internal data memory
+    MEM_INT_DMEM_SIZE    => MEM_INT_DMEM_SIZE,    -- size of processor-internal data memory in bytes
     -- Internal Cache memory --
-    ICACHE_EN                    => ICACHE_EN,            -- implement instruction cache
-    ICACHE_NUM_BLOCKS            => ICACHE_NUM_BLOCKS,    -- i-cache: number of blocks (min 2), has to be a power of 2
-    ICACHE_BLOCK_SIZE            => ICACHE_BLOCK_SIZE,    -- i-cache: block size in bytes (min 4), has to be a power of 2
-    ICACHE_ASSOCIATIVITY         => ICACHE_ASSOCIATIVITY, -- i-cache: associativity (min 1), has to be a power 2
+    ICACHE_EN            => ICACHE_EN,            -- implement instruction cache
+    ICACHE_NUM_BLOCKS    => ICACHE_NUM_BLOCKS,    -- i-cache: number of blocks (min 2), has to be a power of 2
+    ICACHE_BLOCK_SIZE    => ICACHE_BLOCK_SIZE,    -- i-cache: block size in bytes (min 4), has to be a power of 2
+    ICACHE_ASSOCIATIVITY => ICACHE_ASSOCIATIVITY, -- i-cache: associativity (min 1), has to be a power 2
     -- External memory interface --
-    MEM_EXT_EN                   => MEM_EXT_EN,           -- implement external memory bus interface?
-    MEM_EXT_BIG_ENDIAN           => MEM_EXT_BIG_ENDIAN,   -- byte order: true=big-endian, false=little-endian
+    MEM_EXT_EN           => MEM_EXT_EN,           -- implement external memory bus interface?
+    MEM_EXT_BIG_ENDIAN   => MEM_EXT_BIG_ENDIAN,   -- byte order: true=big-endian, false=little-endian
     -- On-Chip Debugger --
-    ON_CHIP_DEBUGGER_EN          => ON_CHIP_DEBUGGER_EN,  -- implement OCD?
+    ON_CHIP_DEBUGGER_EN  => ON_CHIP_DEBUGGER_EN,  -- implement OCD?
     -- Processor peripherals --
-    IO_GPIO_EN                   => IO_GPIO_EN,           -- implement general purpose input/output port unit (GPIO)?
-    IO_MTIME_EN                  => IO_MTIME_EN,          -- implement machine system timer (MTIME)?
-    IO_UART0_EN                  => IO_UART0_EN,          -- implement primary universal asynchronous receiver/transmitter (UART0)?
-    IO_UART1_EN                  => IO_UART1_EN,          -- implement secondary universal asynchronous receiver/transmitter (UART1)?
-    IO_SPI_EN                    => IO_SPI_EN,            -- implement serial peripheral interface (SPI)?
-    IO_TWI_EN                    => IO_TWI_EN,            -- implement two-wire interface (TWI)?
-    IO_PWM_NUM_CH                => IO_PWM_NUM_CH,        -- number of PWM channels to implement
-    IO_WDT_EN                    => IO_WDT_EN,            -- implement watch dog timer (WDT)?
-    IO_TRNG_EN                   => IO_TRNG_EN,           -- implement true random number generator (TRNG)?
-    IO_CFS_EN                    => IO_CFS_EN,            -- implement custom functions subsystem (CFS)?
-    IO_SLINK_EN                  => io_slink_en_c,        -- implement stream link interface?
-    IO_NEOLED_EN                 => IO_NEOLED_EN,         -- implement NeoPixel-compatible smart LED interface (NEOLED)?
-    IO_XIRQ_NUM_CH               => XIRQ_NUM_CH,          -- number of external interrupt (XIRQ) channels to implement
-    IO_GPTMR_EN                  => IO_GPTMR_EN,          -- implement general purpose timer (GPTMR)?
-    IO_XIP_EN                    => IO_XIP_EN             -- implement execute in place module (XIP)?
+    IO_GPIO_EN           => IO_GPIO_EN,           -- implement general purpose input/output port unit (GPIO)?
+    IO_MTIME_EN          => IO_MTIME_EN,          -- implement machine system timer (MTIME)?
+    IO_UART0_EN          => IO_UART0_EN,          -- implement primary universal asynchronous receiver/transmitter (UART0)?
+    IO_UART1_EN          => IO_UART1_EN,          -- implement secondary universal asynchronous receiver/transmitter (UART1)?
+    IO_SPI_EN            => IO_SPI_EN,            -- implement serial peripheral interface (SPI)?
+    IO_TWI_EN            => IO_TWI_EN,            -- implement two-wire interface (TWI)?
+    IO_PWM_NUM_CH        => IO_PWM_NUM_CH,        -- number of PWM channels to implement
+    IO_WDT_EN            => IO_WDT_EN,            -- implement watch dog timer (WDT)?
+    IO_TRNG_EN           => IO_TRNG_EN,           -- implement true random number generator (TRNG)?
+    IO_CFS_EN            => IO_CFS_EN,            -- implement custom functions subsystem (CFS)?
+    IO_SLINK_EN          => io_slink_en_c,        -- implement stream link interface?
+    IO_NEOLED_EN         => IO_NEOLED_EN,         -- implement NeoPixel-compatible smart LED interface (NEOLED)?
+    IO_XIRQ_NUM_CH       => XIRQ_NUM_CH,          -- number of external interrupt (XIRQ) channels to implement
+    IO_GPTMR_EN          => IO_GPTMR_EN,          -- implement general purpose timer (GPTMR)?
+    IO_XIP_EN            => IO_XIP_EN             -- implement execute in place module (XIP)?
   )
   port map (
     -- host access --
@@ -1580,6 +1572,7 @@ begin
       dmi_resp_data_o  => dmi.resp_data,
       dmi_resp_err_o   => dmi.resp_err,             -- 0=ok, 1=error
       -- CPU bus access --
+      cpu_debug_i      => debug_mode,               -- CPU is in debug mode
       cpu_addr_i       => p_bus.addr,               -- address
       cpu_rden_i       => p_bus.re,                 -- read enable
       cpu_wren_i       => p_bus.we,                 -- write enable

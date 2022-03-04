@@ -3,7 +3,7 @@
 // # ********************************************************************************************* #
 // # BSD 3-Clause License                                                                          #
 // #                                                                                               #
-// # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     #
+// # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     #
 // #                                                                                               #
 // # Redistribution and use in source and binary forms, with or without modification, are          #
 // # permitted provided that the following conditions are met:                                     #
@@ -36,7 +36,7 @@
 /**********************************************************************//**
  * @file bootloader.c
  * @author Stephan Nolting
- * @brief NEORV32 bootloader.
+ * @brief Default NEORV32 bootloader.
  **************************************************************************/
 
 // Libraries
@@ -144,6 +144,16 @@ enum ERROR_CODES {
   ERROR_FLASH     = 3  /**< 3: SPI flash access error */
 };
 
+/**********************************************************************//**
+ * Error messages
+ **************************************************************************/
+const char error_message[4][24] = {
+  "exe signature fail",
+  "exceeding IMEM capacity",
+  "checksum fail",
+  "SPI flash access failed"
+};
+
 
 /**********************************************************************//**
  * SPI flash commands
@@ -170,7 +180,7 @@ enum NEORV32_EXECUTABLE {
 
 
 /**********************************************************************//**
- * Valid executable identification signature.
+ * Valid executable identification signature
  **************************************************************************/
 #define EXE_SIGNATURE 0x4788CAFE
 
@@ -331,9 +341,9 @@ int main(void) {
   neorv32_uart0_setup(UART_BAUD, PARITY_NONE, FLOW_CONTROL_NONE);
 #endif
 
-  // Configure machine system timer interrupt for ~2Hz
+  // Configure machine system timer interrupt
   if (neorv32_mtime_available()) {
-    neorv32_mtime_set_timecmp(neorv32_cpu_get_systime() + (NEORV32_SYSINFO.CLK/4));
+    neorv32_mtime_set_timecmp(0 + (NEORV32_SYSINFO.CLK/4));
     // active timer IRQ
     neorv32_cpu_csr_write(CSR_MIE, 1 << CSR_MIE_MTIE); // activate MTIME IRQ source only!
     neorv32_cpu_eint(); // enable global interrupts
@@ -348,15 +358,14 @@ int main(void) {
   PRINT_XNUM(neorv32_cpu_csr_read(CSR_MIMPID));
   PRINT_TEXT("\nCLK:  ");
   PRINT_XNUM(NEORV32_SYSINFO.CLK);
-  PRINT_TEXT("\nMISA: ");
+  PRINT_TEXT("\nISA:  ");
   PRINT_XNUM(neorv32_cpu_csr_read(CSR_MISA));
-  PRINT_TEXT("\nCPU:  ");
-  PRINT_XNUM(NEORV32_SYSINFO.CPU);
+  PRINT_TEXT(" + ");
+  PRINT_XNUM(neorv32_cpu_csr_read(CSR_MXISA));
   PRINT_TEXT("\nSOC:  ");
   PRINT_XNUM(NEORV32_SYSINFO.SOC);
   PRINT_TEXT("\nIMEM: ");
-  PRINT_XNUM(NEORV32_SYSINFO.IMEM_SIZE);
-  PRINT_TEXT(" bytes @");
+  PRINT_XNUM(NEORV32_SYSINFO.IMEM_SIZE); PRINT_TEXT(" bytes @");
   PRINT_XNUM(NEORV32_SYSINFO.ISPACE_BASE);
   PRINT_TEXT("\nDMEM: ");
   PRINT_XNUM(NEORV32_SYSINFO.DMEM_SIZE);
@@ -371,8 +380,8 @@ int main(void) {
 #if (AUTO_BOOT_TIMEOUT != 0)
   if (neorv32_mtime_available()) {
 
-    PRINT_TEXT("\n\nAutoboot in "xstr(AUTO_BOOT_TIMEOUT)"s. Press key to abort.\n");
-    uint64_t timeout_time = neorv32_cpu_get_systime() + (uint64_t)(AUTO_BOOT_TIMEOUT * NEORV32_SYSINFO.CLK);
+    PRINT_TEXT("\n\nAutoboot in "xstr(AUTO_BOOT_TIMEOUT)"s. Press any key to abort.\n");
+    uint64_t timeout_time = neorv32_mtime_get_time() + (uint64_t)(AUTO_BOOT_TIMEOUT * NEORV32_SYSINFO.CLK);
 
     while(1){
 
@@ -382,7 +391,7 @@ int main(void) {
         }
       }
 
-      if (neorv32_cpu_get_systime() >= timeout_time) { // timeout? start auto boot sequence
+      if (neorv32_mtime_get_time() >= timeout_time) { // timeout? start auto boot sequence
         get_exe(EXE_STREAM_FLASH); // try booting from flash
         PRINT_TEXT("\n");
         start_app();
@@ -437,6 +446,9 @@ int main(void) {
       else {
         start_app();
       }
+    }
+    else if (c == '?') {
+      PRINT_TEXT("(c) by Stephan Nolting\nhttps://github.com/stnolting/neorv32");
     }
     else { // unknown command
       PRINT_TEXT("Invalid CMD");
@@ -504,7 +516,7 @@ void __attribute__((__interrupt__)) bootloader_trap_handler(void) {
 #endif
     // set time for next IRQ
     if (neorv32_mtime_available()) {
-      neorv32_mtime_set_timecmp(neorv32_cpu_get_systime() + (NEORV32_SYSINFO.CLK/4));
+      neorv32_mtime_set_timecmp(neorv32_mtime_get_timecmp() + (NEORV32_SYSINFO.CLK/4));
     }
   }
 
@@ -518,13 +530,13 @@ void __attribute__((__interrupt__)) bootloader_trap_handler(void) {
     register uint32_t epc = neorv32_cpu_csr_read(CSR_MEPC);
 #if (UART_EN != 0)
     if (neorv32_uart0_available()) {
-      PRINT_TEXT("\n[ERR ");
+      PRINT_TEXT("\n[ERROR - Unexpected exception! mcause=");
       PRINT_XNUM(cause); // MCAUSE
-      PRINT_PUTC(' ');
+      PRINT_TEXT(" mepc=");
       PRINT_XNUM(epc); // MEPC
-      PRINT_PUTC(' ');
+      PRINT_TEXT(" mtval=");
       PRINT_XNUM(neorv32_cpu_csr_read(CSR_MTVAL)); // MTVAL
-      PRINT_TEXT("]\n");
+      PRINT_TEXT("] trying to resume...\n");
     }
 #endif
     neorv32_cpu_csr_write(CSR_MEPC, epc + 4); // advance to next instruction
@@ -699,12 +711,15 @@ uint32_t get_exe_word(int src, uint32_t addr) {
 /**********************************************************************//**
  * Output system error ID and stall.
  *
- * @param[in] err_code Error code. See #ERROR_CODES.
+ * @param[in] err_code Error code. See #ERROR_CODES and #error_message.
  **************************************************************************/
 void system_error(uint8_t err_code) {
 
   PRINT_TEXT("\a\nERROR_"); // output error code with annoying bell sound
   PRINT_PUTC('0' + ((char)err_code));
+  PRINT_PUTC(':');
+  PRINT_PUTC(' ');
+  PRINT_TEXT(error_message[err_code]);
 
   neorv32_cpu_dint(); // deactivate IRQs
 #if (STATUS_LED_EN != 0)

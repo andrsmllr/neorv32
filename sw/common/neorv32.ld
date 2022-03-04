@@ -3,7 +3,7 @@
 /* # ********************************************************************************************* # */
 /* # BSD 3-Clause License                                                                          # */
 /* #                                                                                               # */
-/* # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     # */
+/* # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     # */
 /* #                                                                                               # */
 /* # Redistribution and use in source and binary forms, with or without modification, are          # */
 /* # permitted provided that the following conditions are met:                                     # */
@@ -46,23 +46,23 @@ OUTPUT_ARCH(riscv)
 ENTRY(_start)
 SEARCH_DIR("/opt/riscv/riscv32-unknown-elf/lib"); SEARCH_DIR("=/opt/riscv/riscv64-unknown-linux-gnu/lib"); SEARCH_DIR("=/usr/local/lib"); SEARCH_DIR("=/lib"); SEARCH_DIR("=/usr/lib");
 
-/* ************************************************************************** */
-/* NEORV32 memory section configuration.                                      */
-/* ************************************************************************** */
-/* "ram"   : data memory (int/ext DMEM) - make sure this is sync with the HW! */
-/* "rom"   : instruction memory (int/ext IMEM or bootloader ROM)              */
-/* "iodev" : peripheral/IO devices                                            */
-/* ************************************************************************** */
+/* **************************************************************************
+ * NEORV32 memory section configuration.                                     
+ * **************************************************************************
+ * "ram"   : data memory (int/ext DMEM) - make sure this is sync with the HW!
+ * "rom"   : instruction memory (int/ext IMEM or bootloader ROM)             
+ * "iodev" : peripheral/IO devices                                           
+ * ************************************************************************** */
 MEMORY
 {
-/* section base addresses and sizes have to be a multiple of 4 bytes */
-/* ram section: first value of LENGTH => data memory used by bootloader (fixed!); second value of LENGTH => *physical* size of data memory */
-/* adapt the right-most value to match the *total physical data memory size* of your setup */
+/* section base addresses and sizes have to be a multiple of 4 bytes
+ * ram section: first value of LENGTH => data memory used by bootloader (fixed!); second value of LENGTH => *physical* size of data memory
+ * adapt the right-most value to match the *total physical data memory size* of your setup */
 
   ram  (rwx) : ORIGIN = 0x80000000, LENGTH = DEFINED(make_bootloader) ? 512 : 8*1024
 
-/* rom and iodev sections should NOT be modified by the user at all! */
-/* rom section: first value of ORIGIN/LENGTH => bootloader ROM; second value of ORIGIN/LENGTH => maximum *logical* size of instruction memory */
+/* rom and iodev sections should NOT be modified by the user at all! 
+ * rom section: first value of ORIGIN/LENGTH => bootloader ROM; second value of ORIGIN/LENGTH => maximum *logical* size of instruction memory */
 
   rom   (rx) : ORIGIN = DEFINED(make_bootloader) ? 0xFFFF0000 : 0x00000000, LENGTH = DEFINED(make_bootloader) ? 32K : 2048M
   iodev (rw) : ORIGIN = 0xFFFFFE00, LENGTH = 512
@@ -75,22 +75,18 @@ SECTIONS
   /* start section on WORD boundary */
   . = ALIGN(4);
 
+  /* default heap size: we can use up to 1/4 of available data memory (RAM) by default
+   * WARNING! the heap will collide with the stack if allocating too much memory! */
+  __heap_size = DEFINED(__heap_size) ? __heap_size : LENGTH(ram) / 4;
 
-  /* Actual instructions */
+
+  /* First part of the actual executable file: actual instructions */
   .text :
   {
     PROVIDE(__text_start = .);
     PROVIDE(__textstart = .);
 
-    PROVIDE_HIDDEN (__rela_iplt_start = .);
-    *(.rela.iplt)
-    PROVIDE_HIDDEN (__rela_iplt_end = .);
-
-    *(.rela.plt)
-
-    KEEP(*(.text.boot)); /* keep start-up code at the beginning of rom */
-
-    KEEP (*(SORT_NONE(.init)))
+    KEEP(*(.text.crt0)); /* keep start-up code crt0 right at the beginning of rom */
 
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
@@ -101,33 +97,6 @@ SECTIONS
     /* .gnu.warning sections are handled specially by elf.em.  */
     *(.gnu.warning)
 
-    KEEP (*(SORT_NONE(.fini)))
-
-    /* gcc uses crtbegin.o to find the start of
-       the constructors, so we make sure it is
-       first.  Because this is a wildcard, it
-       doesn't matter if the user does not
-       actually link against crtbegin.o; the
-       linker won't look for a file to match a
-       wildcard.  The wildcard also means that it
-       doesn't matter which directory crtbegin.o
-       is in.  */
-    KEEP (*crtbegin.o(.ctors))
-    KEEP (*crtbegin?.o(.ctors))
-    /* We don't want to include the .ctor section from
-       the crtend.o file until after the sorted ctors.
-       The .ctor section from the crtend file contains the
-       end of ctors marker and it must be last */
-    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .ctors))
-    KEEP (*(SORT(.ctors.*)))
-    KEEP (*(.ctors))
-
-    KEEP (*crtbegin.o(.dtors))
-    KEEP (*crtbegin?.o(.dtors))
-    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .dtors))
-    KEEP (*(SORT(.dtors.*)))
-    KEEP (*(.dtors))
-
     /* finish section on WORD boundary */
     . = ALIGN(4);
 
@@ -137,28 +106,48 @@ SECTIONS
   } > rom
 
 
-  /* read-only data, appended to .text */
+  /* Second part of the actual executable: read-only data, placed right next to .text */
   .rodata :
   {
-    PROVIDE_HIDDEN (__init_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
-    KEEP (*(.init_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .ctors))
-    PROVIDE_HIDDEN (__init_array_end = .);
+    /* these are a list of 32-bit pointers that point to functions
+     * that are called before/after executing "main". */
 
-    PROVIDE_HIDDEN (__fini_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
-    KEEP (*(.fini_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .dtors))
-    PROVIDE_HIDDEN (__fini_array_end = .);
+
+    /* constructors are not supported by default. */
+
+    /* __init_array_start = .;
+     * KEEP (*(.preinit_array))
+     * KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
+     * KEEP (*(.rodata EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .ctors))
+     * __init_array_end = .;
+     */
+
+
+    /* main should never return, hence there is no default support for deconstructors!
+     * however, if main return, the "after_main_handler" will be called by crt0, which can be used to implement
+     * _minimal_ deconstructor support or to call __libc_fini_array is really really required. */
+
+    /*
+     * __fini_array_start = .;
+     * KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
+     * KEEP (*(.fini_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .dtors))
+     * __fini_array_end = .;
+     */
+
+
+    /* constant data like strings */
 
     *(.rodata .rodata.* .gnu.linkonce.r.*)
     *(.rodata1)
+
 
     /* finish section on WORD boundary */
     . = ALIGN(4);
   } > rom
 
 
-  /* initialized read/write data, accessed in RAM, placed in ROM, copied during boot */
+  /* initialized read/write data, accessed in RAM, placed in ROM, copied during boot
+   * not part of the final executable */
   .data :
   {
     __DATA_BEGIN__ = .;
@@ -178,8 +167,8 @@ SECTIONS
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
     *(.sdata .sdata.* .gnu.linkonce.s.*)
 
-     PROVIDE_HIDDEN (__tdata_start = .);
-     *(.tdata .tdata.* .gnu.linkonce.td.*)
+    PROVIDE_HIDDEN (__tdata_start = .);
+    *(.tdata .tdata.* .gnu.linkonce.td.*)
 
 
     /* finish section on WORD boundary */
@@ -187,14 +176,17 @@ SECTIONS
 
     _edata = .; PROVIDE (edata = .);
     . = .;
+    __DATA_END__ = .;
+    __global_pointer$ = __DATA_END__ + 0x800;
 
   } > ram AT > rom
 
 
-  /* zero/non-initialized read/write data placed in RAM */
+  /* zero/non-initialized read/write data placed in RAM - not part of the final executable */
   .bss (NOLOAD):
   {
-    __bss_start = .;
+    . = ALIGN(4);
+    __BSS_START__ = .;
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
@@ -215,10 +207,18 @@ SECTIONS
        pad the .data section.  */
     . = ALIGN(. != 0 ? 32 / 8 : 1);
 
-    . = ALIGN(32 / 8);
+    . = ALIGN(4);
     __BSS_END__ = .;
-    __global_pointer$ = MIN(__SDATA_BEGIN__ + 0x800, MAX(__DATA_BEGIN__ + 0x800, __BSS_END__ - 0x800));
     _end = .; PROVIDE (end = .);
+  } > ram
+
+
+  /* heap for dynamic memory allocation (use carefully!) -  not part of the final executable */
+  .heap :
+  {
+    PROVIDE(__heap_start = .);
+    . = __heap_size;
+    PROVIDE(__heap_end = .);
   } > ram
 
 
@@ -295,15 +295,15 @@ SECTIONS
   /DISCARD/ : { *(.note.GNU-stack) *(.gnu_debuglink) *(.gnu.lto_*) }
 
 
-  /* Provide symbols for neorv32 crt0 start-up code */
-  PROVIDE(__ctr0_imem_begin          = ORIGIN(rom));
-  PROVIDE(__ctr0_dmem_begin          = ORIGIN(ram));
+  /* Export symbols for neorv32 crt0 start-up code */
+  PROVIDE(__crt0_imem_begin          = ORIGIN(rom));
+  PROVIDE(__crt0_dmem_begin          = ORIGIN(ram));
   PROVIDE(__crt0_stack_begin         = (ORIGIN(ram) + LENGTH(ram)) - 4);
-  PROVIDE(__crt0_bss_start           = __bss_start);
+  PROVIDE(__crt0_bss_start           = __BSS_START__);
   PROVIDE(__crt0_bss_end             = __BSS_END__);
   PROVIDE(__crt0_copy_data_src_begin = __etext + SIZEOF(.rodata));
   PROVIDE(__crt0_copy_data_dst_begin = __DATA_BEGIN__);
   PROVIDE(__crt0_copy_data_dst_end   = __DATA_BEGIN__ + SIZEOF(.data));
-  PROVIDE(__ctr0_io_space_begin      = ORIGIN(iodev));
-  PROVIDE(__ctr0_io_space_end        = ORIGIN(iodev) + LENGTH(iodev));
+  PROVIDE(__crt0_io_space_begin      = ORIGIN(iodev));
+  PROVIDE(__crt0_io_space_end        = ORIGIN(iodev) + LENGTH(iodev));
 }

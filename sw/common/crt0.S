@@ -3,7 +3,7 @@
 /* # ********************************************************************************************* # */
 /* # BSD 3-Clause License                                                                          # */
 /* #                                                                                               # */
-/* # Copyright (c) 2021, Stephan Nolting. All rights reserved.                                     # */
+/* # Copyright (c) 2022, Stephan Nolting. All rights reserved.                                     # */
 /* #                                                                                               # */
 /* # Redistribution and use in source and binary forms, with or without modification, are          # */
 /* # permitted provided that the following conditions are met:                                     # */
@@ -32,10 +32,11 @@
 /* # The NEORV32 Processor - https://github.com/stnolting/neorv32              (c) Stephan Nolting # */
 /* ################################################################################################# */
 
-.file	"crt0.S"
-.section .text.boot
+.file "crt0.S"
+.section .text.crt0
 .balign 4
 .global _start
+.global __crt0_main_exit
 
 
 _start:
@@ -69,22 +70,20 @@ __crt0_pointer_init:
 // ************************************************************************************************
 __crt0_cpu_csr_init:
 
-  la   x10,   __crt0_dummy_trap_handler // configure early trap handler
+  la   x10,   __crt0_dummy_trap_handler // configure early-boot trap handler
   csrw mtvec, x10
   csrw mepc,  x10                       // just to init mepc
 
   csrw mstatus, zero                    // disable global IRQ
+  csrw mie,     zero                    // absolutely no interrupt sources, thanks
+  csrw mip,     zero                    // clear all pending interrupts
 
-  csrw mie, zero                        // absolutely no interrupts sources, thanks
-
+  csrw 0x320,      zero                 // stop all counters; use "mcountinhibit" literal address for lagacy toolchain compatibility
   csrw mcounteren, zero                 // no access from less-privileged modes to counter CSRs
 
-  li   x11,   ~5                        // stop all counters except for [m]cycle[h] and [m]instret[h]
-  csrw 0x320, x11                       // = mcountinhibit (literal address for lagacy toolchain compatibility)
-
-  csrw mcycle,    zero                  // reset cycle counters
+  csrw mcycle,    zero                  // reset cycle counter
   csrw mcycleh,   zero
-  csrw minstret,  zero                  // reset instruction counters
+  csrw minstret,  zero                  // reset instructions-retired counter
   csrw minstreth, zero
 
 
@@ -106,8 +105,8 @@ __crt0_reg_file_clear:
 //addi x11, x0, 0 // implicitly initialized within crt0
 //addi x12, x0, 0 // implicitly initialized within crt0
 //addi x13, x0, 0 // implicitly initialized within crt0
-  addi x14, x0, 0
-  addi x15, x0, 0
+//addi x14, x0, 0 // implicitly initialized within crt0
+//addi x15, x0, 0 // implicitly initialized within crt0
 
 
 // ************************************************************************************************
@@ -139,11 +138,11 @@ __crt0_reg_file_clear:
 // ************************************************************************************************
 // Reset/deactivate IO/peripheral devices
 // Devices, that are not implemented, will cause a store bus access fault
-// which is captured (but actually ignored) by the dummy trap handler.
+// that is catched (but not further processed) by the dummy trap handler.
 // ************************************************************************************************
 __crt0_reset_io:
-  la   x8,   __ctr0_io_space_begin         // start of processor-internal IO region
-  la   x9,   __ctr0_io_space_end           // end of processor-internal IO region
+  la   x8,   __crt0_io_space_begin         // start of processor-internal IO region
+  la   x9,   __crt0_io_space_end           // end of processor-internal IO region
 
 __crt0_reset_io_loop:
   sw   zero, 0(x8)
@@ -152,23 +151,7 @@ __crt0_reset_io_loop:
 
 
 // ************************************************************************************************
-// Clear .bss section (byte-wise) using linker script symbols
-// ************************************************************************************************
-__crt0_clear_bss:
-  la   x11,  __crt0_bss_start
-  la   x12,  __crt0_bss_end
-
-__crt0_clear_bss_loop:
-  bge  x11,  x12, __crt0_clear_bss_loop_end
-  sb   zero, 0(x11)
-  addi x11,  x11, 1
-  j    __crt0_clear_bss_loop
-
-__crt0_clear_bss_loop_end:
-
-
-// ************************************************************************************************
-// Copy initialized .data section from ROM to RAM (byte-wise) using linker script symbols
+// Copy initialized .data section from ROM to RAM (byte-wise)
 // ************************************************************************************************
 __crt0_copy_data:
   la   x11, __crt0_copy_data_src_begin        // start of data area (copy source)
@@ -187,48 +170,68 @@ __crt0_copy_data_loop_end:
 
 
 // ************************************************************************************************
+// Clear .bss section (byte-wise)
+// ************************************************************************************************
+__crt0_clear_bss:
+  la   x14,  __crt0_bss_start
+  la   x15,  __crt0_bss_end
+
+__crt0_clear_bss_loop:
+  bge  x14,  x15, __crt0_clear_bss_loop_end
+  sb   zero, 0(x14)
+  addi x14,  x14, 1
+  j    __crt0_clear_bss_loop
+
+__crt0_clear_bss_loop_end:
+
+
+// ************************************************************************************************
 // Setup arguments and call main function
 // ************************************************************************************************
 __crt0_main_entry:
-  addi x10, zero, 0 // a0 = argc = 0
-  addi x11, zero, 0 // a1 = argv = 0
-  jal  ra,  main    // call actual app's main function, this "should" not return
+  addi a0,  zero, 0                  // a0 = argc = 0
+  addi a1,  zero, 0                  // a1 = argv = 0
+  jal  ra,  main                     // call actual app's main function, this "should" not return
+
+__crt0_main_exit:                    // main's "return" and "exit" will arrive here
+  csrw mscratch, a0                  // backup main's return code to mscratch (for debugger)
 
 
 // ************************************************************************************************
 // call "after main" handler (if there is any) if main really returns
 // ************************************************************************************************
-__crt0_main_aftermath:
-  csrw  mscratch, a0                 // copy main's return code in mscratch for debugger
-
 #ifndef make_bootloader              // after_main handler not supported for bootloader
+
+__crt0_main_aftermath:
   .weak __neorv32_crt0_after_main
   la   ra, __neorv32_crt0_after_main
   beqz ra, __crt0_main_aftermath_end // check if an aftermath handler has been specified
-  jalr ra                            // execute handler, main's return code in a0
+  jalr ra                            // execute handler with main's return code still in a0
+
+__crt0_main_aftermath_end:
+
 #endif
 
 
 // ************************************************************************************************
 // go to endless sleep mode
 // ************************************************************************************************
-__crt0_main_aftermath_end:
-  csrci mstatus, 8                   // mstatus: disable global IRQs (mstatus.mie)
-__crt0_main_aftermath_end_loop:
-  wfi                                // try to go to sleep mode
-  j __crt0_main_aftermath_end_loop   // endless loop
+__crt0_shutdown:
+  csrci mstatus, 8                   // disable global IRQs (clear mstatus.mie)
+  wfi                                // go to sleep mode
+  j __crt0_shutdown                  // endless loop
 
 
 // ************************************************************************************************
 // dummy trap handler (for exceptions & IRQs during very early boot stage)
-// does nothing but tries to move on to next instruction
+// does nothing but trying to move on to the next instruction
 // ************************************************************************************************
 .balign 4
 __crt0_dummy_trap_handler:
 
-  addi	sp,   sp, -8
-  sw	  x8,   0(sp)
-  sw	  x9,   4(sp)
+  addi  sp,   sp, -8
+  sw    x8,   0(sp)
+  sw    x9,   4(sp)
 
   csrr  x8,   mcause
   blt   x8,   zero, __crt0_dummy_trap_handler_irq  // skip mepc modification if interrupt

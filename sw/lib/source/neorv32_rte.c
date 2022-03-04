@@ -128,7 +128,7 @@ int neorv32_rte_exception_uninstall(uint8_t id) {
  *
  * @warning When using the the RTE, this function is the ONLY function that can use the 'interrupt' attribute!
  **************************************************************************/
-static void __attribute__((__interrupt__)) __attribute__((aligned(4)))  __neorv32_rte_core(void) {
+static void __attribute__((__interrupt__)) __attribute__((aligned(4))) __neorv32_rte_core(void) {
 
   register uint32_t rte_mepc = neorv32_cpu_csr_read(CSR_MEPC);
   neorv32_cpu_csr_write(CSR_MSCRATCH, rte_mepc); // store for later
@@ -138,8 +138,7 @@ static void __attribute__((__interrupt__)) __attribute__((aligned(4)))  __neorv3
   if (((int32_t)rte_mcause) >= 0) { // modify pc only if not interrupt (MSB cleared)
 
     // get low half word of faulting instruction
-    register uint32_t rte_trap_inst;
-    asm volatile ("lh %[result], 0(%[input_i])" : [result] "=r" (rte_trap_inst) : [input_i] "r" (rte_mepc));
+    register uint32_t rte_trap_inst = neorv32_cpu_load_unsigned_half(rte_mepc);
 
     if ((rte_trap_inst & 3) == 3) { // faulting instruction is uncompressed instruction
       rte_mepc += 4;
@@ -323,7 +322,7 @@ void neorv32_rte_print_hw_config(void) {
   else {
     neorv32_uart0_printf("unknown");
   }
-  
+
   // CPU extensions
   neorv32_uart0_printf("\nISA extensions:    ");
   tmp = neorv32_cpu_csr_read(CSR_MISA);
@@ -336,36 +335,41 @@ void neorv32_rte_print_hw_config(void) {
   }
   
   // Z* CPU extensions
-  tmp = NEORV32_SYSINFO.CPU;
-  if (tmp & (1<<SYSINFO_CPU_ZICSR)) {
+  tmp = neorv32_cpu_csr_read(CSR_MXISA);
+  if (tmp & (1<<CSR_MXISA_ZICSR)) {
     neorv32_uart0_printf("Zicsr ");
   }
-  if (tmp & (1<<SYSINFO_CPU_ZICNTR)) {
+  if (tmp & (1<<CSR_MXISA_ZICNTR)) {
     neorv32_uart0_printf("Zicntr ");
   }
-  if (tmp & (1<<SYSINFO_CPU_ZIHPM)) {
+  if (tmp & (1<<CSR_MXISA_ZIHPM)) {
     neorv32_uart0_printf("Zihpm ");
   }
-  if (tmp & (1<<SYSINFO_CPU_ZIFENCEI)) {
+  if (tmp & (1<<CSR_MXISA_ZIFENCEI)) {
     neorv32_uart0_printf("Zifencei ");
   }
-  if (tmp & (1<<SYSINFO_CPU_ZMMUL)) {
+  if (tmp & (1<<CSR_MXISA_ZMMUL)) {
     neorv32_uart0_printf("Zmmul ");
   }
-  if (tmp & (1<<SYSINFO_CPU_ZFINX)) {
+  if (tmp & (1<<CSR_MXISA_ZFINX)) {
     neorv32_uart0_printf("Zfinx ");
   }
-  if (tmp & (1<<SYSINFO_CPU_ZXSCNT)) {
+  if (tmp & (1<<CSR_MXISA_ZXCFU)) {
+    neorv32_uart0_printf("Zxcfu ");
+  }
+  if (tmp & (1<<CSR_MXISA_ZXSCNT)) {
     neorv32_uart0_printf("Zxscnt(!) ");
   }
-
-  if (tmp & (1<<SYSINFO_CPU_DEBUGMODE)) {
-    neorv32_uart0_printf("Debug ");
+  if (tmp & (1<<CSR_MXISA_DEBUGMODE)) {
+    neorv32_uart0_printf("DebugMode ");
   }
-  if (tmp & (1<<SYSINFO_CPU_FASTMUL)) {
+
+  // CPU extension options
+  neorv32_uart0_printf("\nExtension options: ");
+  if (tmp & (1<<CSR_MXISA_FASTMUL)) {
     neorv32_uart0_printf("FAST_MUL ");
   }
-  if (tmp & (1<<SYSINFO_CPU_FASTSHIFT)) {
+  if (tmp & (1<<CSR_MXISA_FASTSHIFT)) {
     neorv32_uart0_printf("FAST_SHIFT ");
   }
 
@@ -373,7 +377,7 @@ void neorv32_rte_print_hw_config(void) {
   neorv32_uart0_printf("\nPMP:               ");
   uint32_t pmp_num_regions = neorv32_cpu_pmp_get_num_regions();
   if (pmp_num_regions != 0)  {
-    neorv32_uart0_printf("%u regions, %u bytes minimal granularity\n", pmp_num_regions, neorv32_cpu_pmp_get_granularity());
+    neorv32_uart0_printf("%u regions, %u bytes minimal granularity, OFF/TOR modes only\n", pmp_num_regions, neorv32_cpu_pmp_get_granularity());
   }
   else {
     neorv32_uart0_printf("not implemented\n");
@@ -383,7 +387,7 @@ void neorv32_rte_print_hw_config(void) {
   // Memory configuration
   neorv32_uart0_printf("\n=== << Memory System >> ===\n");
 
-  neorv32_uart0_printf("Boot Config.:        Boot ");
+  neorv32_uart0_printf("Boot configuration:  Boot ");
   if (NEORV32_SYSINFO.SOC & (1 << SYSINFO_SOC_BOOTLOADER)) {
     neorv32_uart0_printf("via Bootloader\n");
   }
@@ -453,7 +457,7 @@ void neorv32_rte_print_hw_config(void) {
 
   neorv32_uart0_printf("Ext. bus interface:  ");
   __neorv32_rte_print_true_false(NEORV32_SYSINFO.SOC & (1 << SYSINFO_SOC_MEM_EXT));
-  neorv32_uart0_printf("Ext. bus Endianness: ");
+  neorv32_uart0_printf("Ext. bus endianness: ");
   if (NEORV32_SYSINFO.SOC & (1 << SYSINFO_SOC_MEM_EXT_ENDIAN)) {
     neorv32_uart0_printf("big\n");
   }
@@ -582,10 +586,8 @@ void neorv32_rte_print_credits(void) {
     return; // cannot output anything if UART0 is not implemented
   }
 
-  neorv32_uart0_print("The NEORV32 RISC-V Processor\n"
-                      "(c) 2021, Stephan Nolting\n"
-                      "BSD 3-Clause License\n"
-                      "https://github.com/stnolting/neorv32\n\n");
+  neorv32_uart0_print("The NEORV32 RISC-V Processor, https://github.com/stnolting/neorv32\n"
+                      "(c) 2022 by Stephan Nolting, BSD 3-Clause License\n\n");
 }
 
 
@@ -648,7 +650,7 @@ void neorv32_rte_print_license(void) {
   "\n"
   "BSD 3-Clause License\n"
   "\n"
-  "Copyright (c) 2021, Stephan Nolting. All rights reserved.\n"
+  "Copyright (c) 2022, Stephan Nolting. All rights reserved.\n"
   "\n"
   "Redistribution and use in source and binary forms, with or without modification, are\n"
   "permitted provided that the following conditions are met:\n"
